@@ -98,3 +98,81 @@ def test_traffic_rules_simple_vifRule(host: Host, imported_vm: VM):
 
     finally:
         vm.destroy()
+
+# XXX xo-cli (on test host) should be configured to see the host
+# XXX particular configuration
+@pytest.mark.complex_prerequisites
+@pytest.mark.small_vm
+def test_traffic_rules_simple_networkRule(host: Host, imported_vm: VM):
+    # check host is reachable from XO via xo_cli
+    assert host.xo_get_server_id() is not None
+
+    vm = imported_vm.clone()
+    try:
+        networkId = host.management_network()
+        hostBr = "xenbr0" # XXX hardcoded: get info from host
+
+        assert count_of(host, hostBr) == 0, "no OF at init"
+
+        # add OF rule (before starting VM)
+        xo_cli('sdnController.addNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.1',
+            'direction': 'to',
+            'protocol': 'icmp',
+            'allow': 'true',
+        })
+
+        # start the VM
+        vm.start()
+
+        # wait for XO to see the VM
+        vm.wait_for_os_booted()
+
+        # add OF rule (while running)
+        xo_cli('sdnController.addNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.2',
+            'direction': 'to',
+            'protocol': 'icmp',
+            'allow': 'true',
+        })
+
+        # delete OF rule (while running)
+        xo_cli('sdnController.deleteNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.1',
+            'direction': 'to',
+            'protocol': 'icmp',
+        })
+
+        vm.shutdown(verify=True)
+
+        # delete OF rule (while stopped)
+        xo_cli('sdnController.deleteNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.2',
+            'direction': 'to',
+            'protocol': 'icmp',
+        })
+
+        assert count_of(host, hostBr) == 0, "after shutdown VM, still no OF"
+    finally:
+        vm.destroy()
+
+        # remove networkRule
+        xo_cli('sdnController.deleteNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.1',
+            'direction': 'to',
+            'protocol': 'icmp',
+        })
+        xo_cli('sdnController.deleteNetworkRule', {
+            'networkId': networkId,
+            'ipRange': '10.0.0.2',
+            'direction': 'to',
+            'protocol': 'icmp',
+        })
+
+        # XXX manual OF rule cleanup
+        host.ssh(f"ovs-ofctl -O OpenFlow11 del-flows {hostBr} icmp")
